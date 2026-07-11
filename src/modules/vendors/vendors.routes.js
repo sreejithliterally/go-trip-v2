@@ -70,6 +70,29 @@
  *       200:
  *         description: Bank details updated
  *
+ * /vendors/profile/me/listings:
+ *   get:
+ *     tags: [Vendors]
+ *     summary: List my listings (vendor)
+ *     parameters:
+ *       - in: query
+ *         name: category
+ *         schema: { type: string, enum: [hotel, package, glamping, activity] }
+ *         description: Filter by listing category
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [draft, pending_approval, active, suspended, archived] }
+ *         description: Filter by listing status
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Paginated list of vendor's listings
+ *
  * /vendors:
  *   get:
  *     tags: [Vendors]
@@ -155,8 +178,9 @@ router.post('/profile',
   ctrl.createProfile
 );
 
-router.get('/profile/me',       requireVendor, ctrl.getMyProfile);
-router.patch('/profile/me',     requireVendor, ctrl.updateProfile);
+router.get('/profile/me',           requireVendor, ctrl.getMyProfile);
+router.patch('/profile/me',         requireVendor, ctrl.updateProfile);
+router.get('/profile/me/listings',  requireVendor, ctrl.myListings);
 
 // KYC upload (vendor uploads docs)
 router.post('/profile/me/kyc',  requireVendor, uploadKyc.array('docs', 5), ctrl.uploadKyc);

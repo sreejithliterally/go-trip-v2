@@ -98,18 +98,20 @@
  * /admin/activity-highlights:
  *   get:
  *     tags: [Admin]
- *     summary: List activity highlight masters (public)
- *     description: Returns pre-seeded highlights. Filter by activityType to get relevant highlights for a listing.
+ *     summary: List activity highlights by type (public)
+ *     description: Returns pre-seeded highlights for a given activity type. Pass to `POST /activities` as `highlightIds`.
  *     security: []
  *     parameters:
  *       - in: query
  *         name: activityType
+ *         required: false
  *         schema:
  *           type: string
  *           enum: [trekking, water_sports, adventure, cultural, wildlife, cycling, camping, yoga_wellness, culinary, sightseeing]
+ *         description: Filter by activity type. Omit to get all highlights.
  *     responses:
  *       200:
- *         description: List of highlights with id, name, description, icon
+ *         description: Highlight list with id, name, description, icon
  *
  * /admin/cancellation-policies:
  *   get:

@@ -8,7 +8,8 @@ ActivityHighlightMaster.init({
   activityType: { type: DataTypes.STRING(50), allowNull: false },
   name:         { type: DataTypes.STRING(100), allowNull: false },
   description:  { type: DataTypes.TEXT },
-  icon:         { type: DataTypes.STRING(100), comment: 'Icon name or URL (e.g. lucide icon key)' },
+  icon:         { type: DataTypes.STRING(100) },
+  sortOrder:    { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
   isActive:     { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
 }, {
   sequelize,

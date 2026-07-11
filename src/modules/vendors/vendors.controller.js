@@ -1,4 +1,4 @@
-const { VendorProfile, User } = require('../../db/index');
+const { VendorProfile, User, Listing } = require('../../db/index');
 const { parsePagination } = require('../../shared/utils/pagination');
 const R = require('../../shared/utils/apiResponse');
 const { resolveFileUrl } = require('../../shared/middleware/upload');
@@ -62,6 +62,29 @@ const updateBankAccount = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const myListings = async (req, res, next) => {
+  try {
+    const vendor = await VendorProfile.findOne({ where: { userId: req.user.id } });
+    if (!vendor) return R.notFound(res, 'Vendor profile not found');
+
+    const where = { vendorId: vendor.id };
+    if (req.query.category) where.category = req.query.category;
+    if (req.query.status)   where.status   = req.query.status;
+
+    const { limit, offset } = parsePagination(req.query);
+
+    const { count, rows } = await Listing.findAndCountAll({
+      where,
+      attributes: ['id', 'category', 'title', 'status', 'isPublished', 'avgRating', 'reviewCount', 'createdAt', 'updatedAt'],
+      order: [['created_at', 'DESC']],
+      limit,
+      offset,
+    });
+
+    R.paginated(res, { data: rows, total: count, limit, offset });
+  } catch (err) { next(err); }
+};
+
 const list = async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query);
@@ -104,4 +127,4 @@ const updateCommission = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { createProfile, getMyProfile, updateProfile, uploadKyc, updateBankAccount, list, getById, updateKycStatus, updateCommission };
+module.exports = { createProfile, getMyProfile, updateProfile, uploadKyc, updateBankAccount, myListings, list, getById, updateKycStatus, updateCommission };

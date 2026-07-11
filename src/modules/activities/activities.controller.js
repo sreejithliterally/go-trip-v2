@@ -5,13 +5,58 @@ const { assertVendorOwnsListing, getVendorProfileId, addImage } = require('../li
 const R = require('../../shared/utils/apiResponse');
 const { resolveFileUrl } = require('../../shared/middleware/upload');
 
-const ACTIVITY_TYPES = ['trekking', 'water_sports', 'adventure', 'cultural', 'wildlife', 'cycling', 'camping', 'yoga_wellness', 'culinary', 'sightseeing'];
+const ACTIVITY_TYPES = [
+  'trekking', 'water_sports', 'adventure', 'cultural',
+  'wildlife', 'cycling', 'camping', 'yoga_wellness', 'culinary', 'sightseeing',
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const HIGHLIGHT_INCLUDE = {
+  model: ActivityHighlightMaster,
+  as:    'highlights',
+  through: { attributes: [] },
+  attributes: ['id', 'name', 'description', 'icon', 'sortOrder'],
+};
+
+/**
+ * Validate highlight IDs and attach them to an activity.
+ * All IDs must belong to the activity's activityType.
+ * replace=true removes all existing selections first.
+ */
+const attachHighlights = async (activityId, activityType, highlightIds, transaction, { replace = false } = {}) => {
+  if (!highlightIds?.length) return;
+  const unique = [...new Set(highlightIds)];
+
+  const found = await ActivityHighlightMaster.count({
+    where: { id: unique, activityType, isActive: true },
+    transaction,
+  });
+  if (found !== unique.length) {
+    const err = new Error(`One or more highlight IDs are invalid or do not belong to activityType "${activityType}"`);
+    err.status = 400;
+    throw err;
+  }
+
+  if (replace) {
+    await ActivityHighlight.destroy({ where: { activityId }, transaction });
+  }
+
+  await ActivityHighlight.bulkCreate(
+    unique.map(highlightMasterId => ({ activityId, highlightMasterId })),
+    { transaction, ignoreDuplicates: true }
+  );
+};
+
+// ── Public ────────────────────────────────────────────────────────────────────
 
 const list = async (req, res, next) => {
   try {
     const { limit, offset } = parsePagination(req.query);
     const where = { category: 'activity', isPublished: true, status: 'active' };
-    if (req.query.city) where[Op.and] = [sequelize.where(sequelize.cast(sequelize.col('location_json'), 'text'), { [Op.iLike]: `%${req.query.city}%` })];
+    if (req.query.city) {
+      where[Op.and] = [sequelize.where(sequelize.cast(sequelize.col('location_json'), 'text'), { [Op.iLike]: `%${req.query.city}%` })];
+    }
     if (req.query.activityType) {
       where['$activity.activity_type$'] = req.query.activityType;
     }
@@ -19,7 +64,8 @@ const list = async (req, res, next) => {
     const { count, rows } = await Listing.findAndCountAll({
       where,
       include: [{ model: Activity, as: 'activity' }],
-      order: [['avg_rating', 'DESC NULLS LAST']], limit, offset, subQuery: false,
+      order: [['avg_rating', 'DESC NULLS LAST']],
+      limit, offset, subQuery: false,
     });
     const data = await Promise.all(rows.map(async (l) => {
       const cover = await ListingImage.findOne({ where: { entityId: l.id, isCover: true } });
@@ -37,7 +83,7 @@ const get = async (req, res, next) => {
           model: Activity, as: 'activity',
           include: [
             { model: ActivitySlot, as: 'slots', where: { isActive: true }, required: false },
-            { model: ActivityHighlightMaster, as: 'highlights', through: { attributes: [] }, where: { isActive: true }, required: false },
+            HIGHLIGHT_INCLUDE,
           ],
         },
         { model: ListingImage, as: 'images', where: { entityType: 'listing' }, required: false },
@@ -48,14 +94,16 @@ const get = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── Vendor ────────────────────────────────────────────────────────────────────
+
 const create = async (req, res, next) => {
   try {
     const vendorId = await getVendorProfileId(req.user.id);
     const {
       title, description, locationJson, cancellationPolicyId,
-      activityType = 'adventure', basePriceAdult, basePriceInfant = 0, minAge,
-      totalSlotsPerDay, aboutExperience,
-      inclusions, exclusions, whatsprovided, thingsToCarry, howToReach,
+      activityType, basePriceAdult, basePriceInfant = 0, minAge,
+      totalSlotsPerDay,
+      aboutExperience, inclusions, exclusions, whatsprovided, thingsToCarry, howToReach,
       highlightIds,
     } = req.body;
 
@@ -65,8 +113,12 @@ const create = async (req, res, next) => {
         { transaction: t }
       );
       const act = await Activity.create({
-        listingId: listing.id, activityType, basePriceAdult, basePriceInfant,
-        minAge: minAge || null, totalSlotsPerDay: totalSlotsPerDay || null,
+        listingId:        listing.id,
+        activityType:     activityType,
+        basePriceAdult,
+        basePriceInfant,
+        minAge:           minAge           || null,
+        totalSlotsPerDay: totalSlotsPerDay || null,
         aboutExperience:  aboutExperience  || null,
         inclusions:       inclusions       || null,
         exclusions:       exclusions       || null,
@@ -76,16 +128,12 @@ const create = async (req, res, next) => {
       }, { transaction: t });
 
       if (highlightIds?.length) {
-        const valid = await ActivityHighlightMaster.count({ where: { id: highlightIds, activityType, isActive: true } });
-        if (valid !== highlightIds.length) throw Object.assign(new Error('One or more highlight IDs are invalid for this activity type'), { status: 400 });
-        await ActivityHighlight.bulkCreate(
-          highlightIds.map(hid => ({ activityId: act.id, highlightMasterId: hid })),
-          { transaction: t, ignoreDuplicates: true }
-        );
+        await attachHighlights(act.id, activityType, highlightIds, t);
       }
 
       return { listing, activity: act };
     });
+
     R.created(res, { id: result.listing.id, ...result });
   } catch (err) { next(err); }
 };
@@ -96,9 +144,8 @@ const update = async (req, res, next) => {
     const listing  = await assertVendorOwnsListing(req.params.id, vendorId);
     const {
       title, description, locationJson, cancellationPolicyId,
-      activityType, basePriceAdult, basePriceInfant, minAge,
-      totalSlotsPerDay, aboutExperience,
-      inclusions, exclusions, whatsprovided, thingsToCarry, howToReach,
+      activityType, basePriceAdult, basePriceInfant, minAge, totalSlotsPerDay,
+      aboutExperience, inclusions, exclusions, whatsprovided, thingsToCarry, howToReach,
     } = req.body;
 
     await listing.update({
@@ -128,7 +175,6 @@ const update = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// Replace the full set of selected highlights for an activity (PUT = replace)
 const setHighlights = async (req, res, next) => {
   try {
     const vendorId = await getVendorProfileId(req.user.id);
@@ -137,31 +183,19 @@ const setHighlights = async (req, res, next) => {
     const act = await Activity.findOne({ where: { listingId: req.params.id } });
     if (!act) return R.notFound(res, 'Activity not found');
 
-    const { highlightIds } = req.body;
-
-    if (highlightIds.length) {
-      const valid = await ActivityHighlightMaster.count({
-        where: { id: highlightIds, activityType: act.activityType, isActive: true },
-      });
-      if (valid !== highlightIds.length) {
-        return R.error(res, 'One or more highlight IDs are invalid for this activity type', 400);
-      }
-    }
-
-    await ActivityHighlight.destroy({ where: { activityId: act.id } });
-    if (highlightIds.length) {
-      await ActivityHighlight.bulkCreate(
-        highlightIds.map(hid => ({ activityId: act.id, highlightMasterId: hid })),
-        { ignoreDuplicates: true }
-      );
-    }
+    await sequelize.transaction(async (t) => {
+      await attachHighlights(act.id, act.activityType, req.body.highlightIds, t, { replace: true });
+    });
 
     const updated = await ActivityHighlightMaster.findAll({
       include: [{ model: Activity, as: 'activities', where: { id: act.id }, through: { attributes: [] } }],
+      attributes: ['id', 'name', 'description', 'icon', 'sortOrder'],
     });
     R.success(res, { highlights: updated });
   } catch (err) { next(err); }
 };
+
+// ── Slots ─────────────────────────────────────────────────────────────────────
 
 const createSlot = async (req, res, next) => {
   try {
@@ -170,7 +204,15 @@ const createSlot = async (req, res, next) => {
     const act = await Activity.findOne({ where: { listingId: req.params.id } });
     if (!act) return R.notFound(res);
     const { label, durationMinutes, startTime, maxParticipants, priceOverrideAdult, priceOverrideInfant } = req.body;
-    const slot = await ActivitySlot.create({ activityId: act.id, label, durationMinutes: durationMinutes || null, startTime: startTime || null, maxParticipants: maxParticipants || null, priceOverrideAdult: priceOverrideAdult || null, priceOverrideInfant: priceOverrideInfant || null });
+    const slot = await ActivitySlot.create({
+      activityId:          act.id,
+      label,
+      durationMinutes:     durationMinutes    || null,
+      startTime:           startTime          || null,
+      maxParticipants:     maxParticipants    || null,
+      priceOverrideAdult:  priceOverrideAdult || null,
+      priceOverrideInfant: priceOverrideInfant || null,
+    });
     R.created(res, { slot });
   } catch (err) { next(err); }
 };
@@ -182,20 +224,31 @@ const updateSlot = async (req, res, next) => {
     const slot = await ActivitySlot.findByPk(req.params.slotId);
     if (!slot) return R.notFound(res);
     const { label, maxParticipants, priceOverrideAdult, isActive } = req.body;
-    await slot.update({ label: label ?? slot.label, maxParticipants: maxParticipants ?? slot.maxParticipants, priceOverrideAdult: priceOverrideAdult ?? slot.priceOverrideAdult, isActive: isActive ?? slot.isActive });
+    await slot.update({
+      label:              label             ?? slot.label,
+      maxParticipants:    maxParticipants   ?? slot.maxParticipants,
+      priceOverrideAdult: priceOverrideAdult ?? slot.priceOverrideAdult,
+      isActive:           isActive          ?? slot.isActive,
+    });
     R.success(res, { slot });
   } catch (err) { next(err); }
 };
+
+// ── Images ────────────────────────────────────────────────────────────────────
 
 const uploadImages = async (req, res, next) => {
   try {
     if (!req.files?.length) return R.error(res, 'No images uploaded');
     const vendorId = await getVendorProfileId(req.user.id);
     await assertVendorOwnsListing(req.params.id, vendorId);
-    const images = await Promise.all(req.files.map((f, i) => addImage({ listingId: req.params.id, entityType: 'listing', entityId: req.params.id, url: resolveFileUrl(f), sortOrder: i, isCover: i === 0 })));
+    const images = await Promise.all(req.files.map((f, i) =>
+      addImage({ listingId: req.params.id, entityType: 'listing', entityId: req.params.id, url: resolveFileUrl(f), sortOrder: i, isCover: i === 0 })
+    ));
     R.created(res, { images });
   } catch (err) { next(err); }
 };
+
+// ── Status ────────────────────────────────────────────────────────────────────
 
 const submitForApproval = async (req, res, next) => {
   try {
@@ -213,4 +266,11 @@ const approve = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { ACTIVITY_TYPES, list, get, create, update, setHighlights, createSlot, updateSlot, uploadImages, submitForApproval, approve };
+module.exports = {
+  ACTIVITY_TYPES,
+  list, get,
+  create, update, setHighlights,
+  createSlot, updateSlot,
+  uploadImages,
+  submitForApproval, approve,
+};

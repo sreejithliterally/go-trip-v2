@@ -29,6 +29,7 @@ const reviewRoutes        = require('./modules/reviews/reviews.routes');
 const couponRoutes        = require('./modules/coupons/coupons.routes');
 const notificationRoutes  = require('./modules/notifications/notifications.routes');
 const adminRoutes         = require('./modules/admin/admin.routes');
+const searchRoutes        = require('./modules/search/search.routes');
 
 const app = express();
 
@@ -95,6 +96,7 @@ app.use(`${v1}/reviews`,           reviewRoutes);
 app.use(`${v1}/coupons`,           couponRoutes);
 app.use(`${v1}/notifications`,     notificationRoutes);
 app.use(`${v1}/admin`,             adminRoutes);
+app.use(`${v1}/search`,            searchRoutes);
 
 // ── 404 ───────────────────────────────────────────────────────────────────────
 app.use((req, res) => {

@@ -38,12 +38,17 @@
  *             type: object
  *             required: [code, discountType, discountValue, validFrom, validTo]
  *             properties:
- *               code:          { type: string }
- *               discountType:  { type: string, enum: [flat, percentage] }
- *               discountValue: { type: number }
- *               validFrom:     { type: string, format: date }
- *               validTo:       { type: string, format: date }
- *               usageLimit:    { type: integer }
+ *               code:             { type: string }
+ *               discountType:     { type: string, enum: [flat, percentage] }
+ *               discountValue:    { type: number }
+ *               maxDiscountCap:   { type: number, description: "Only applied to percentage discounts" }
+ *               minBookingAmount: { type: number }
+ *               validFrom:        { type: string, format: date }
+ *               validTo:          { type: string, format: date }
+ *               usageLimit:       { type: integer }
+ *               applicableCategories:
+ *                 type: array
+ *                 items: { type: string, enum: [hotel, package, glamping, activity] }
  *     responses:
  *       201:
  *         description: Coupon created
@@ -93,8 +98,13 @@ router.post('/',    authenticate, requireAdmin,
   body('code').notEmpty().trim(),
   body('discountType').isIn(['flat','percentage']),
   body('discountValue').isDecimal(),
+  body('maxDiscountCap').optional().isDecimal(),
+  body('minBookingAmount').optional().isDecimal(),
   body('validFrom').isISO8601(),
   body('validTo').isISO8601(),
+  body('usageLimit').optional().isInt({ min: 1 }),
+  body('applicableCategories').optional().isArray(),
+  body('applicableCategories.*').optional().isIn(['hotel','package','glamping','activity']),
   validate,
   ctrl.create
 );

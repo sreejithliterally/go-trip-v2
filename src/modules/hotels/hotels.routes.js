@@ -62,6 +62,23 @@
  *         name: id
  *         required: true
  *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: All fields optional — only supplied fields are updated.
+ *             properties:
+ *               title:                { type: string }
+ *               description:          { type: string }
+ *               locationJson:         { type: object }
+ *               metaJson:             { type: object }
+ *               starRating:           { type: integer, minimum: 1, maximum: 5 }
+ *               checkInTime:          { type: string }
+ *               checkOutTime:         { type: string }
+ *               propertyRules:        { type: array, items: { type: string } }
+ *               cancellationPolicyId: { type: string, format: uuid }
  *     responses:
  *       200:
  *         description: Updated
@@ -116,9 +133,8 @@
  *             properties:
  *               bedType:          { type: string, enum: [single, double, queen, king, bunk, sofa_bed, twin] }
  *               totalBeds:        { type: integer, minimum: 1 }
- *               maxGuests:        { type: integer, minimum: 1 }
+ *               maxGuests:        { type: integer, minimum: 1, description: "Hard cap — bookings exceeding this are rejected." }
  *               pricePerNight:    { type: number }
- *               extraGuestCharge: { type: number }
  *     responses:
  *       200:
  *         description: Property details saved
@@ -320,7 +336,6 @@ router.post('/:id/property-details',
   body('totalBeds').optional().isInt({ min: 1 }),
   body('maxGuests').isInt({ min: 1 }),
   body('pricePerNight').isDecimal(),
-  body('extraGuestCharge').optional().isDecimal(),
   validate,
   ctrl.setFullPropertyDetails
 );
@@ -334,15 +349,27 @@ router.post('/:id/room-types',
   body('floorAreaSqft').optional().isInt({ min: 1 }),
   body('totalUnits').isInt({ min: 1 }),
   body('defaultAdultOccupancy').optional().isInt({ min: 1 }),
-  body('maxAdultOccupancy').optional().isInt({ min: 1 }),
+  body('maxAdultOccupancy').optional().isInt({ min: 1 })
+    .custom((val, { req }) => {
+      const def = req.body.defaultAdultOccupancy ?? 2;
+      if (Number(val) < Number(def)) throw new Error('maxAdultOccupancy must be >= defaultAdultOccupancy');
+      return true;
+    }),
   body('defaultChildOccupancy').optional().isInt({ min: 0 }),
-  body('maxChildOccupancy').optional().isInt({ min: 0 }),
+  body('maxChildOccupancy').optional().isInt({ min: 0 })
+    .custom((val, { req }) => {
+      const def = req.body.defaultChildOccupancy ?? 0;
+      if (Number(val) < Number(def)) throw new Error('maxChildOccupancy must be >= defaultChildOccupancy');
+      return true;
+    }),
   body('defaultInfantOccupancy').optional().isInt({ min: 0 }),
-  body('maxInfantOccupancy').optional().isInt({ min: 0 }),
+  body('maxInfantOccupancy').optional().isInt({ min: 0 })
+    .custom((val, { req }) => {
+      const def = req.body.defaultInfantOccupancy ?? 0;
+      if (Number(val) < Number(def)) throw new Error('maxInfantOccupancy must be >= defaultInfantOccupancy');
+      return true;
+    }),
   body('basePricePerNight').isDecimal(),
-  body('extraAdultCharge').optional().isDecimal(),
-  body('extraChildCharge').optional().isDecimal(),
-  body('extraInfantCharge').optional().isDecimal(),
   body('amenityIds').optional().isArray(),
   body('amenityIds.*').optional().isUUID(),
   body('mealPlans').optional().isArray(),

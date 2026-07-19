@@ -3,15 +3,46 @@ const { Op } = require('sequelize');
 const { parsePagination }   = require('../../shared/utils/pagination');
 const { calculateBookingPrice, resolveCouponDiscount } = require('../../shared/utils/priceCalculator');
 const { resolveEntityMeta, checkInventory, generateRef } = require('./bookings.service');
+const { resolveCapacity } = require('../../shared/utils/capacityResolver');
 const R = require('../../shared/utils/apiResponse');
+
+const computeNights = (checkIn, checkOut) => {
+  if (!checkOut) return 1;
+  return Math.round((new Date(checkOut) - new Date(checkIn)) / 86400000);
+};
+
+const buildFallbackSearchUrl = ({ checkIn, checkOut, adults, children, locationJson }) => {
+  const params = new URLSearchParams({ type: 'hotel', checkIn, adults: String(adults), children: String(children || 0) });
+  if (checkOut) params.set('checkOut', checkOut);
+  const q = locationJson?.city || locationJson?.locality || null;
+  if (q) params.set('q', q);
+  return `/search?${params.toString()}`;
+};
 
 // ── Step 1: Check availability + price ────────────────────────────────────────
 
 const checkAvailability = async (req, res, next) => {
   try {
-    const { entityType, entityId, checkIn, checkOut, adults, infants = 0, unitsBooked = 1, mealPlanId, couponCode } = req.body;
+    const { entityType, entityId, checkIn, checkOut, adults, children = 0, infants = 0, unitsBooked = 1, mealPlanId, couponCode } = req.body;
     const meta    = await resolveEntityMeta(entityType, entityId);
     const endDate = checkOut || new Date(new Date(checkIn).getTime() + 86400000).toISOString().split('T')[0];
+
+    if (meta.hotel_property_id) {
+      const capacity = await resolveCapacity({
+        hotelPropertyId: meta.hotel_property_id, entityId, adults, children, unitsBooked,
+        nights: computeNights(checkIn, checkOut),
+      });
+      if (!capacity.fits) {
+        return res.json({
+          success: true, available: false, capacityExceeded: true,
+          message: 'Selected room does not accommodate this many guests.',
+          suggestions: capacity.suggestions,
+          fallbackSearchUrl: capacity.noFitInHotel
+            ? buildFallbackSearchUrl({ checkIn, checkOut, adults, children, locationJson: meta.location_json })
+            : null,
+        });
+      }
+    }
 
     const calRows = await sequelize.query(
       `SELECT date, total_units - booked_units - blocked_units AS available_units, is_blocked
@@ -25,9 +56,7 @@ const checkAvailability = async (req, res, next) => {
     if (unavailable.length) return res.json({ success: true, available: false, unavailableDates: unavailable.map(r => r.date) });
 
     const breakdown = await calculateBookingPrice({
-      entityType, entityId, checkIn, checkOut, adults, infants, unitsBooked,
-      defaultAdultOccupancy: meta.default_adult_occupancy || 2,
-      extraAdultCharge:      meta.extra_adult_charge || 0,
+      entityType, entityId, checkIn, checkOut, adults, children, infants, unitsBooked,
       mealPlanId: mealPlanId || null, mealPlanType: meta.mealPlanType || null,
       platformFeePct: parseFloat(process.env.PLATFORM_FEE_PCT || '2'),
     });
@@ -51,8 +80,24 @@ const checkAvailability = async (req, res, next) => {
 
 const hold = async (req, res, next) => {
   try {
-    const { entityType, entityId, listingId, checkIn, checkOut, adults, infants = 0, unitsBooked = 1, mealPlanId, activitySlotId, couponCode, specialRequests, guests = [] } = req.body;
+    const { entityType, entityId, listingId, checkIn, checkOut, adults, children = 0, infants = 0, unitsBooked = 1, mealPlanId, activitySlotId, couponCode, specialRequests, guests = [], comboRef } = req.body;
     const meta = await resolveEntityMeta(entityType, entityId);
+
+    if (meta.hotel_property_id) {
+      const capacity = await resolveCapacity({
+        hotelPropertyId: meta.hotel_property_id, entityId, adults, children, unitsBooked,
+        nights: computeNights(checkIn, checkOut),
+      });
+      if (!capacity.fits) {
+        throw Object.assign(new Error('Selected room does not accommodate this many guests.'), {
+          status: 422, capacityExceeded: true,
+          suggestions: capacity.suggestions,
+          fallbackSearchUrl: capacity.noFitInHotel
+            ? buildFallbackSearchUrl({ checkIn, checkOut, adults, children, locationJson: meta.location_json })
+            : null,
+        });
+      }
+    }
 
     const result = await sequelize.transaction(async (t) => {
       // Lock availability rows
@@ -69,9 +114,7 @@ const hold = async (req, res, next) => {
 
       // Server-side price
       const breakdown = await calculateBookingPrice({
-        entityType, entityId, checkIn, checkOut, adults, infants, unitsBooked,
-        defaultAdultOccupancy: meta.default_adult_occupancy || 2,
-        extraAdultCharge:      meta.extra_adult_charge || 0,
+        entityType, entityId, checkIn, checkOut, adults, children, infants, unitsBooked,
         mealPlanId: mealPlanId || null, mealPlanType: meta.mealPlanType || null,
         platformFeePct: parseFloat(process.env.PLATFORM_FEE_PCT || '2'),
       });
@@ -94,12 +137,13 @@ const hold = async (req, res, next) => {
       const bookingRef = await generateRef(t);
       const booking = await Booking.create({
         bookingRef, userId: req.user.id, listingId, vendorId: meta.vendor_id,
-        entityType, entityId, checkIn, checkOut: checkOut || null, adults, infants,
+        entityType, entityId, checkIn, checkOut: checkOut || null, adults, children, infants,
         unitsBooked, mealPlanId: mealPlanId || null, activitySlotId: activitySlotId || null,
         status: 'pending_payment', specialRequests: specialRequests || null,
+        comboRef: comboRef || null,
       }, { transaction: t });
 
-      const snapshot = { ...breakdown, entityType, entityId, checkIn, checkOut, adults, infants, unitsBooked };
+      const snapshot = { ...breakdown, entityType, entityId, checkIn, checkOut, adults, children, infants, unitsBooked };
       await BookingPricing.create({
         bookingId: booking.id, nights: breakdown.nights,
         basePrice: breakdown.basePrice, extraPersonCharge: breakdown.extraPersonCharge,
@@ -121,6 +165,12 @@ const hold = async (req, res, next) => {
     res.status(201).json({ success: true, ...result });
   } catch (err) {
     if (err.status === 409) return R.error(res, err.message, 409);
+    if (err.status === 422 && err.capacityExceeded) {
+      return res.status(422).json({
+        success: false, capacityExceeded: true, message: err.message,
+        suggestions: err.suggestions, fallbackSearchUrl: err.fallbackSearchUrl,
+      });
+    }
     next(err);
   }
 };

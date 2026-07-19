@@ -32,8 +32,7 @@ const getMealPlanCharges = async (mealPlanId, planType) => {
  */
 const calculateBookingPrice = async ({
   entityType, entityId, checkIn, checkOut,
-  adults, infants = 0, unitsBooked = 1,
-  defaultAdultOccupancy = 2, extraAdultCharge = 0,
+  adults, children = 0, infants = 0, unitsBooked = 1,
   mealPlanId = null, mealPlanType = null,
   platformFeePct = 0,
 }) => {
@@ -47,15 +46,17 @@ const calculateBookingPrice = async ({
   const prices = await getEffectivePrices(entityType, entityId, checkIn, checkOut);
   if (!prices.length) throw new Error('No availability prices found for date range');
 
-  const nights      = prices.length;
-  const basePrice   = prices.reduce((s, r) => s + Number(r.effective_price), 0) * unitsBooked;
-  const extraAdults = Math.max(0, adults - defaultAdultOccupancy);
-  const extraPersonCharge = extraAdultCharge * extraAdults * nights;
+  const nights    = prices.length;
+  const basePrice = prices.reduce((s, r) => s + Number(r.effective_price), 0) * unitsBooked;
+
+  // Hard capacity enforcement replaces per-extra-adult pricing: rooms either fit
+  // the party or they don't (see capacityResolver.js). No extra-person surcharge.
+  const extraPersonCharge = 0;
 
   let mealCharge = 0;
   if (mealPlanId && mealPlanType) {
     const ppPerMeal = await getMealPlanCharges(mealPlanId, mealPlanType);
-    mealCharge = ppPerMeal * adults * nights;
+    mealCharge = ppPerMeal * (adults + children) * nights;
   }
 
   return buildBreakdown({ nights, basePrice, extraPersonCharge, mealCharge, platformFeePct });

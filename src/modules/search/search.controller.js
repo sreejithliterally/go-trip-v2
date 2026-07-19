@@ -4,12 +4,16 @@ const {
   Listing,
   ListingImage,
   HotelProperty,
+  RoomType,
   Package,
   Activity,
   GlampingSite,
 } = require('../../db/index');
 const { parsePagination } = require('../../shared/utils/pagination');
+const { findRoomCombination, fitsSingleRoomType } = require('../../shared/utils/capacityResolver');
 const R = require('../../shared/utils/apiResponse');
+
+const MAX_CAPACITY_PAGE_ATTEMPTS = 4;
 
 // Batch-fetch cover images for a list of listing IDs — avoids N+1 queries
 const attachCoverImages = async (rows) => {
@@ -20,7 +24,7 @@ const attachCoverImages = async (rows) => {
     attributes: ['entityId', 'url'],
   });
   const coverMap = Object.fromEntries(covers.map((c) => [c.entityId, c.url]));
-  return rows.map((l) => ({ ...l.toJSON(), coverImage: coverMap[l.id] ?? null }));
+  return rows.map((l) => ({ ...l.toJSON(), coverImage: coverMap[l.id] ?? null, ...(l.capacityFit !== undefined ? { capacityFit: l.capacityFit } : {}) }));
 };
 
 // Build OR condition: match title or any text inside locationJson
@@ -46,7 +50,7 @@ const buildTextCondition = (q) => ({
  */
 const search = async (req, res, next) => {
   try {
-    const { type, q, checkIn, checkOut, rooms, guests, category } = req.query;
+    const { type, q, checkIn, checkOut, rooms, guests, adults, children, category } = req.query;
     const { limit, offset } = parsePagination(req.query);
 
     const baseWhere = { category: type, isPublished: true, status: 'active' };
@@ -55,14 +59,61 @@ const search = async (req, res, next) => {
     const order = [['avg_rating', 'DESC NULLS LAST'], ['created_at', 'DESC']];
     const common = { where: baseWhere, order, limit, offset, subQuery: false };
 
-    let count, rows, meta = {};
+    let count, rows, meta = {}, approximateTotal = false;
 
     if (type === 'hotel') {
-      ({ count, rows } = await Listing.findAndCountAll({
+      const adultsN = adults ? Number(adults) : 0;
+      const childrenN = children ? Number(children) : 0;
+      const capacityAware = adultsN > 0 || childrenN > 0;
+
+      const fetchPage = (pageOffset) => Listing.findAndCountAll({
         ...common,
-        include: [{ model: HotelProperty, as: 'hotelProperty' }],
-      }));
-      meta = { checkIn, checkOut, rooms: rooms ? Number(rooms) : null, guests: guests ? Number(guests) : null };
+        offset: pageOffset,
+        include: [{
+          model: HotelProperty, as: 'hotelProperty', required: capacityAware,
+          include: [{
+            model: RoomType, as: 'roomTypes', where: { isActive: true }, required: capacityAware,
+            attributes: ['id', 'name', 'totalUnits', 'maxAdultOccupancy', 'maxChildOccupancy', 'basePricePerNight'],
+          }],
+        }],
+      });
+
+      if (!capacityAware) {
+        ({ count, rows } = await fetchPage(offset));
+      } else {
+        // Filter for exact capacity fit in-process using the already-loaded
+        // roomTypes (no N+1 queries), fetching subsequent pages if the current
+        // page comes up short after filtering. `count` becomes an upper bound,
+        // since an exact total would require scanning the full unpaginated set.
+        approximateTotal = true;
+        let collected = [];
+        let pageOffset = offset;
+        let attempts = 0;
+        let lastCount = 0;
+        while (collected.length < limit && attempts < MAX_CAPACITY_PAGE_ATTEMPTS) {
+          const page = await fetchPage(pageOffset);
+          lastCount = page.count;
+          if (!page.rows.length) break;
+          const filtered = page.rows.filter((l) => {
+            const roomTypes = l.hotelProperty?.roomTypes || [];
+            if (roomTypes.some((r) => fitsSingleRoomType({ room: r, adults: adultsN, children: childrenN, unitsBooked: r.totalUnits }))) return true;
+            return findRoomCombination({ rooms: roomTypes, adults: adultsN, children: childrenN, nights: 1 }).length > 0;
+          });
+          filtered.forEach((l) => {
+            const roomTypes = l.hotelProperty?.roomTypes || [];
+            const fit = findRoomCombination({ rooms: roomTypes, adults: adultsN, children: childrenN, nights: 1 });
+            l.capacityFit = fit[0] ? { combinationType: fit[0].combinationType, estimatedTotalPerNight: fit[0].estimatedTotalPerNight } : null;
+          });
+          collected = collected.concat(filtered);
+          pageOffset += limit;
+          attempts++;
+          if (page.rows.length < limit) break;
+        }
+        rows = collected.slice(0, limit);
+        count = lastCount;
+      }
+
+      meta = { checkIn, checkOut, rooms: rooms ? Number(rooms) : null, guests: guests ? Number(guests) : null, adults: adultsN || null, children: childrenN || null, approximateTotal };
 
     } else if (type === 'package') {
       ({ count, rows } = await Listing.findAndCountAll({

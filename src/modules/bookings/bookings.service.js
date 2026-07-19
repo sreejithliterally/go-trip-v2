@@ -6,8 +6,8 @@ const { sequelize, QueryTypes, RoomType, GlampingSite, ActivitySlot, Package, Ac
 const resolveEntityMeta = async (entityType, entityId) => {
   if (entityType === 'room_type' || entityType === 'full_property') {
     const rows = await sequelize.query(
-      `SELECT rt.default_adult_occupancy, rt.extra_adult_charge,
-              l.vendor_id, l.category, l.cancellation_policy_id,
+      `SELECT rt.hotel_property_id, rt.max_adult_occupancy, rt.max_child_occupancy, rt.total_units,
+              l.vendor_id, l.category, l.cancellation_policy_id, l.location_json,
               hp.listing_type
        FROM room_types rt
        JOIN hotel_properties hp ON hp.id = rt.hotel_property_id

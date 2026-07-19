@@ -17,15 +17,18 @@
  *               checkIn:     { type: string, format: date }
  *               checkOut:    { type: string, format: date }
  *               adults:      { type: integer, minimum: 1 }
- *               infants:     { type: integer, minimum: 0 }
+ *               children:    { type: integer, minimum: 0, description: "Ages 2-12. Counts against room maxChildOccupancy." }
+ *               infants:     { type: integer, minimum: 0, description: "Under 2. Recorded only, never gates room capacity." }
  *               unitsBooked: { type: integer, minimum: 1 }
  *               mealPlanId:  { type: string, format: uuid }
  *               couponCode:  { type: string }
  *     responses:
  *       200:
- *         description: Availability confirmed with price breakdown
- *       409:
- *         description: Not available for selected dates
+ *         description: >
+ *           One of three shapes: (a) available:true with priceBreakdown,
+ *           (b) available:false with unavailableDates (dates blocked/insufficient units),
+ *           (c) available:false with capacityExceeded:true, suggestions[], and fallbackSearchUrl
+ *           (party exceeds room capacity — see suggestions for same_room_type/cross_room_type options).
  *
  * /bookings/hold:
  *   post:
@@ -39,7 +42,13 @@
  *             $ref: '#/components/schemas/BookingRequest'
  *     responses:
  *       201:
- *         description: Booking held — proceed to payment
+ *         description: Booking held — proceed to payment. Response is { success:true, booking, priceBreakdown }.
+ *       409:
+ *         description: Requested dates are not available (inventory conflict)
+ *       422:
+ *         description: >
+ *           capacityExceeded — party exceeds room capacity. Response is
+ *           { success:false, capacityExceeded:true, message, suggestions[], fallbackSearchUrl }.
  *
  * /bookings/my:
  *   get:
@@ -189,6 +198,7 @@ router.post('/check-availability',
   body('checkIn').isISO8601(),
   body('checkOut').optional().isISO8601(),
   body('adults').isInt({ min: 1 }),
+  body('children').optional().isInt({ min: 0 }),
   body('infants').optional().isInt({ min: 0 }),
   body('unitsBooked').optional().isInt({ min: 1 }),
   body('mealPlanId').optional().isUUID(),
@@ -205,6 +215,7 @@ router.post('/hold',
   body('checkIn').isISO8601(),
   body('checkOut').optional().isISO8601(),
   body('adults').isInt({ min: 1 }),
+  body('children').optional().isInt({ min: 0 }),
   body('infants').optional().isInt({ min: 0 }),
   body('unitsBooked').optional().isInt({ min: 1 }),
   body('mealPlanId').optional().isUUID(),
@@ -212,6 +223,7 @@ router.post('/hold',
   body('couponCode').optional().trim(),
   body('specialRequests').optional().trim(),
   body('guests').optional().isArray(),
+  body('comboRef').optional().isUUID(),
   validate,
   ctrl.hold
 );

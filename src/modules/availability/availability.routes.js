@@ -148,9 +148,9 @@
  *               name:              { type: string }
  *               startDate:         { type: string, format: date }
  *               endDate:           { type: string, format: date }
- *               priceOverride:     { type: number }
- *               priceModifierPct:  { type: number }
- *               priority:          { type: integer }
+ *               priceOverride:     { type: number, description: "Flat replacement price. Provide exactly one of priceOverride/priceModifierPct." }
+ *               priceModifierPct:  { type: number, description: "Percentage modifier applied to base price. Provide exactly one of priceOverride/priceModifierPct." }
+ *               priority:          { type: integer, default: 0, description: "Highest priority wins when seasonal rules overlap" }
  *     responses:
  *       201:
  *         description: Seasonal pricing rule created
@@ -211,6 +211,9 @@ router.post('/:entityType/:entityId/seasonal',
   body('name').notEmpty(),
   body('startDate').isISO8601(),
   body('endDate').isISO8601(),
+  body('priceOverride').optional().isDecimal(),
+  body('priceModifierPct').optional().isDecimal(),
+  body('priority').optional().isInt({ min: 0 }),
   validate,
   ctrl.createSeasonalPricing
 );

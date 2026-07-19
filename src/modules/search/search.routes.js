@@ -22,6 +22,12 @@ const searchValidators = [
   query('rooms').optional().isInt({ min: 1 }).withMessage('rooms must be a positive integer'),
   query('guests').optional().isInt({ min: 1 }).withMessage('guests must be a positive integer'),
 
+  // adults/children (hotel only): when present, filters/ranks results by room
+  // capacity fit — see capacityResolver.js. Infants deliberately not accepted
+  // here — they never gate capacity, so there's nothing for search to filter on.
+  query('adults').optional().isInt({ min: 0 }).withMessage('adults must be a non-negative integer'),
+  query('children').optional().isInt({ min: 0 }).withMessage('children must be a non-negative integer'),
+
   query('category').optional().isString().trim(),
 
   query('limit').optional().isInt({ min: 1, max: 100 }),
@@ -91,6 +97,21 @@ const suggestionValidators = [
  *           type: integer
  *         description: Number of guests (hotel only, optional)
  *       - in: query
+ *         name: adults
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *         description: >
+ *           Hotel only. When set (with or without children), results are filtered/ranked
+ *           by whether the hotel has a room or in-hotel room combination that fits the
+ *           party. See capacityFit in the response.
+ *       - in: query
+ *         name: children
+ *         schema:
+ *           type: integer
+ *           minimum: 0
+ *         description: Hotel only. Ages 2-12, used together with adults for capacity filtering.
+ *       - in: query
  *         name: category
  *         schema:
  *           type: string
@@ -109,7 +130,42 @@ const suggestionValidators = [
  *           default: 0
  *     responses:
  *       200:
- *         description: Paginated list of matching listings with coverImage
+ *         description: >
+ *           Paginated list of matching listings with coverImage. When adults/children
+ *           are set for a hotel search, each listing may include capacityFit
+ *           ({ combinationType, estimatedTotalPerNight }) and total becomes an
+ *           upper-bound estimate rather than an exact count (see meta.approximateTotal).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 total:   { type: integer, description: "Upper-bound estimate when capacity filtering is active" }
+ *                 limit:   { type: integer }
+ *                 offset:  { type: integer }
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     description: Listing fields plus coverImage, and capacityFit when applicable
+ *                     properties:
+ *                       capacityFit:
+ *                         type: object
+ *                         nullable: true
+ *                         properties:
+ *                           combinationType: { type: string, enum: [same_room_type, cross_room_type] }
+ *                           estimatedTotalPerNight: { type: number }
+ *                 meta:
+ *                   type: object
+ *                   properties:
+ *                     checkIn: { type: string }
+ *                     checkOut: { type: string }
+ *                     rooms: { type: integer, nullable: true }
+ *                     guests: { type: integer, nullable: true }
+ *                     adults: { type: integer, nullable: true }
+ *                     children: { type: integer, nullable: true }
+ *                     approximateTotal: { type: boolean, description: "True when total is an upper bound, not exact" }
  *       400:
  *         description: Validation error or missing required field
  */
@@ -132,7 +188,8 @@ router.get('/', searchValidators, validate, search);
  *         schema:
  *           type: string
  *           minLength: 2
- *         description: Partial text typed by the user (min 2 characters)
+ *           maxLength: 100
+ *         description: Partial text typed by the user (2-100 characters)
  *       - in: query
  *         name: type
  *         schema:

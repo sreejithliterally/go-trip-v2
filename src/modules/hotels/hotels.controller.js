@@ -104,6 +104,7 @@ const get = async (req, res, next) => {
           include: [{
             model: RoomType, as: 'roomTypes',
             where: { isActive: true }, required: false,
+            attributes: { exclude: ['extraAdultCharge', 'extraChildCharge', 'extraInfantCharge'] },
             include: [
               { model: RoomMealPlan, as: 'mealPlans' },
               { model: AmenityMaster, as: 'amenities', through: { attributes: [] } },
@@ -125,6 +126,7 @@ const getRoomTypes = async (req, res, next) => {
     if (!hp) return R.notFound(res);
     const roomTypes = await RoomType.findAll({
       where: { hotelPropertyId: hp.id, isActive: true },
+      attributes: { exclude: ['extraAdultCharge', 'extraChildCharge', 'extraInfantCharge'] },
       include: [{ model: RoomMealPlan, as: 'mealPlans' }, { model: AmenityMaster, as: 'amenities', through: { attributes: [] } }],
     });
     R.success(res, { roomTypes });
@@ -191,9 +193,14 @@ const createRoomType = async (req, res, next) => {
       defaultChildOccupancy = 0, maxChildOccupancy = 2,
       defaultInfantOccupancy = 0, maxInfantOccupancy = 2,
       basePricePerNight,
-      extraAdultCharge = 0, extraChildCharge = 0, extraInfantCharge = 0,
       mealPlans, amenityIds,
     } = req.body;
+
+    // maxAdultOccupancy/maxChildOccupancy/maxInfantOccupancy are hard caps now
+    // (see capacityResolver.js) — must be at least the corresponding default.
+    if (maxAdultOccupancy < defaultAdultOccupancy || maxChildOccupancy < defaultChildOccupancy || maxInfantOccupancy < defaultInfantOccupancy) {
+      return R.error(res, 'max occupancy fields must be >= corresponding default occupancy fields', 400);
+    }
 
     const result = await sequelize.transaction(async (t) => {
       const roomType = await RoomType.create({
@@ -202,7 +209,7 @@ const createRoomType = async (req, res, next) => {
         defaultAdultOccupancy, maxAdultOccupancy,
         defaultChildOccupancy, maxChildOccupancy,
         defaultInfantOccupancy, maxInfantOccupancy,
-        basePricePerNight, extraAdultCharge, extraChildCharge, extraInfantCharge,
+        basePricePerNight,
       }, { transaction: t });
 
       const plans = await RoomMealPlan.bulkCreate(
@@ -235,7 +242,7 @@ const setFullPropertyDetails = async (req, res, next) => {
     if (!hp)                              return R.notFound(res, 'Hotel property not found');
     if (hp.listingType !== 'full_property') return R.error(res, 'This endpoint is only for full_property listings. Use /room-types for multi-room hotels.', 400);
 
-    const { bedType, totalBeds = 1, maxGuests, pricePerNight, extraGuestCharge = 0 } = req.body;
+    const { bedType, totalBeds = 1, maxGuests, pricePerNight } = req.body;
 
     const existing = await RoomType.findOne({ where: { hotelPropertyId: hp.id } });
 
@@ -247,7 +254,6 @@ const setFullPropertyDetails = async (req, res, next) => {
         defaultAdultOccupancy: maxGuests,
         maxAdultOccupancy:     maxGuests,
         basePricePerNight:     pricePerNight,
-        extraAdultCharge:      extraGuestCharge,
       });
       return R.success(res, { roomType: existing, message: 'Property details updated' });
     }
@@ -262,7 +268,6 @@ const setFullPropertyDetails = async (req, res, next) => {
       defaultAdultOccupancy: maxGuests,
       maxAdultOccupancy:     maxGuests,
       basePricePerNight:     pricePerNight,
-      extraAdultCharge:      extraGuestCharge,
     });
     R.created(res, { roomType, message: 'Property details saved. Availability seeded for 365 days.' });
   } catch (err) { next(err); }
@@ -280,9 +285,19 @@ const updateRoomType = async (req, res, next) => {
       defaultAdultOccupancy, maxAdultOccupancy,
       defaultChildOccupancy, maxChildOccupancy,
       defaultInfantOccupancy, maxInfantOccupancy,
-      basePricePerNight, extraAdultCharge, extraChildCharge, extraInfantCharge,
+      basePricePerNight,
       isActive, mealPlans,
     } = req.body;
+
+    const mergedMaxAdult   = maxAdultOccupancy     ?? rt.maxAdultOccupancy;
+    const mergedDefAdult   = defaultAdultOccupancy ?? rt.defaultAdultOccupancy;
+    const mergedMaxChild   = maxChildOccupancy     ?? rt.maxChildOccupancy;
+    const mergedDefChild   = defaultChildOccupancy ?? rt.defaultChildOccupancy;
+    const mergedMaxInfant  = maxInfantOccupancy    ?? rt.maxInfantOccupancy;
+    const mergedDefInfant  = defaultInfantOccupancy?? rt.defaultInfantOccupancy;
+    if (mergedMaxAdult < mergedDefAdult || mergedMaxChild < mergedDefChild || mergedMaxInfant < mergedDefInfant) {
+      return R.error(res, 'max occupancy fields must be >= corresponding default occupancy fields', 400);
+    }
 
     await sequelize.transaction(async (t) => {
       await rt.update({
@@ -291,16 +306,13 @@ const updateRoomType = async (req, res, next) => {
         numBeds:               numBeds               ?? rt.numBeds,
         floorAreaSqft:         floorAreaSqft         ?? rt.floorAreaSqft,
         totalUnits:            totalUnits            ?? rt.totalUnits,
-        defaultAdultOccupancy: defaultAdultOccupancy ?? rt.defaultAdultOccupancy,
-        maxAdultOccupancy:     maxAdultOccupancy     ?? rt.maxAdultOccupancy,
-        defaultChildOccupancy: defaultChildOccupancy ?? rt.defaultChildOccupancy,
-        maxChildOccupancy:     maxChildOccupancy     ?? rt.maxChildOccupancy,
-        defaultInfantOccupancy:defaultInfantOccupancy?? rt.defaultInfantOccupancy,
-        maxInfantOccupancy:    maxInfantOccupancy    ?? rt.maxInfantOccupancy,
+        defaultAdultOccupancy: mergedDefAdult,
+        maxAdultOccupancy:     mergedMaxAdult,
+        defaultChildOccupancy: mergedDefChild,
+        maxChildOccupancy:     mergedMaxChild,
+        defaultInfantOccupancy:mergedDefInfant,
+        maxInfantOccupancy:    mergedMaxInfant,
         basePricePerNight:     basePricePerNight     ?? rt.basePricePerNight,
-        extraAdultCharge:      extraAdultCharge      ?? rt.extraAdultCharge,
-        extraChildCharge:      extraChildCharge      ?? rt.extraChildCharge,
-        extraInfantCharge:     extraInfantCharge     ?? rt.extraInfantCharge,
         isActive:              isActive              ?? rt.isActive,
       }, { transaction: t });
 

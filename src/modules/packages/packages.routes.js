@@ -197,6 +197,10 @@ const { uploadListingImage } = require('../../shared/middleware/upload');
 router.get('/',    ctrl.list);
 router.get('/:id', ctrl.get);
 
+// ── My enquiries (user) — must be registered before /:id/enquiries below,
+// otherwise Express matches "my" as the :id param on that route instead.
+router.get('/my/enquiries', authenticate, ctrl.myEnquiries);
+
 // ── Enquiry (authenticated users) ─────────────────────────────────────────────
 router.post('/:id/enquiries',
   authenticate,
@@ -211,9 +215,6 @@ router.patch('/enquiries/:eid', authenticate, requireVendor,
   validate,
   ctrl.replyEnquiry
 );
-
-// ── My enquiries (user) ────────────────────────────────────────────────────────
-router.get('/my/enquiries', authenticate, ctrl.myEnquiries);
 
 // ── Vendor ────────────────────────────────────────────────────────────────────
 router.post('/',

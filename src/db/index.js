@@ -134,7 +134,7 @@ PackageItinerary.belongsTo(Package, { foreignKey: 'package_id' });
 
 // Listing / User <-> Enquiry
 Listing.hasMany(Enquiry, { foreignKey: 'listing_id', as: 'enquiries' });
-Enquiry.belongsTo(Listing, { foreignKey: 'listing_id' });
+Enquiry.belongsTo(Listing, { foreignKey: 'listing_id', as: 'listing' });
 User.hasMany(Enquiry, { foreignKey: 'user_id', as: 'enquiries' });
 Enquiry.belongsTo(User, { foreignKey: 'user_id', as: 'user' });
 
